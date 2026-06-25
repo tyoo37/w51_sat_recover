@@ -1,7 +1,10 @@
-# original file : https://github.com/keflavich/brick-jwst-2221/blob/main/brick2221/reduction/saturated_star_finding.py
 import os
-os.environ['STPSF_PATH'] = '/blue/adamginsburg/t.yoo/from_red/stpsf-data'
-print(f"STPSF_PATH={os.environ['STPSF_PATH']}")
+
+os.environ["STPSF_PATH"]="/blue/adamginsburg/t.yoo/from_red/stpsf-data"
+os.environ["WEBBPSF_PATH"]="/blue/adamginsburg/t.yoo/from_red/stpsf-data"
+
+
+import stpsf
 import glob
 from astropy.io import fits
 from scipy.ndimage import label, find_objects, center_of_mass, sum_labels
@@ -139,7 +142,8 @@ from stpsf.utils import to_griddedpsfmodel
 
 
 
-def collect_saturated_pixels(fitsdata, rampdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=30, size=None, min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filtername=None, instrument=None, detector=None):
+def collect_saturated_pixels(fitsdata, rampdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=30, size=None, 
+min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filtername=None, instrument=None, detector=None, fn=None, img_save_dir = '/orange/adamginsburg/w51/TaehwaYoo/w51_sat_recover/cutout_img'):
     jfilts = SvoFps.get_filter_list('JWST')
     jfilts.add_index('filterID')
     jfilts = SvoFps.get_filter_list(facility="JWST", instrument=instrument)
@@ -304,7 +308,7 @@ def collect_saturated_pixels(fitsdata, rampdata, path_prefix='/orange/adamginsbu
             try:
                 result = psfphot(cutout, init_params=init_params, mask=mask)
             except Exception as ex:
-                print(f"PSF photometry failed for source {i+1} at (x,y)=({xcen},{ycen}): {ex}", flush=True)
+                print(f"PSF photometry failed for source {ii+1} at (x,y)=({xcen},{ycen}): {ex}", flush=True)
                 continue
             
             result['xcentroid'] = result['x_fit'] + x0
@@ -390,7 +394,6 @@ def collect_saturated_pixels(fitsdata, rampdata, path_prefix='/orange/adamginsbu
                 
             # process the result
             if result is not None and np.isfinite(fluxerr) and snr > 1 and flux > 0:
-                print(f"Accepting source {i+1} with flux={flux}, fluxerr={fluxerr}, snr={snr}", flush=True)
                 if index == 0:
                     base_tab = result
                 else:
@@ -437,11 +440,12 @@ def collect_saturated_pixels(fitsdata, rampdata, path_prefix='/orange/adamginsbu
                     ax2.imshow(model_image, origin='lower', cmap='viridis', vmin=0, vmax=np.nanpercentile(cutout, 99))
                     ax3 = fig.add_subplot(1,3,3)
                     ax3.imshow(cutout_copied, origin='lower', cmap='viridis', vmin=0, vmax=np.nanpercentile(cutout, 99))
-                    ax3.set_title('Cutout with Saturated Pixels Replaced')
                     # print flux, fluxerr, snr, cfit in the title
+                    #ax3.set_title(f'Cutout with Saturated Pixels Replaced\nFlux: {flux_vals[0]:.2f}, FluxErr: {fluxerr_vals[0]:.2f}, SNR: {snr:.2f}, Cfit: {cfit:.2f}')
                     
-
-                    plt.show()
+                    img_file_name = fn.replace("_cal.fits", f"_ml_training_{ii}.png")
+                    img_file_name = filtername.lower()+img_file_name.split("/")[-1]
+                    plt.savefig(f"{img_save_dir}/{img_file_name}")
                     plt.close()
                 num_sat_pixels = len(npwhere_1d_idx_saturated_in_original)
                 # get 2D coords in the original image (row, col)
@@ -599,6 +603,7 @@ def main():
     (options, args) = parser.parse_args()
 
     filt = options.filternames.split(",")
+    filts = [f.strip().upper() for f in options.filternames.split(",") if f.strip()]
 
     proposal_id = options.proposal_id
     target = options.target
@@ -620,60 +625,68 @@ def main():
     nircam_long_filters = ['F300M', 'F335M', 'F356W', 'F360M','F405N', 'F410M', 'F430M', 'F444W', 'F460M', 'F480M']
     miri_filters = ['F560W', 'F770W', 'F1000W', 'F1130W', 'F1280W', 'F1500W', 'F1800W', 'F2100W', 'F2550W']
     
-
-    if filt in ['F140M', 'F162M', 'F182M', 'F187N', 'F210M']:
-        modules = ('nrca1', 'nrca2', 'nrca3', 'nrca4', 'nrcb1', 'nrcb2', 'nrcb3', 'nrcb4')
-    elif filt in ['F335M', 'F360M', 'F405N', 'F410M', 'F480M']:
-        modules = ('nrcalong', 'nrcblong')
-    else:
-        modules = ('mirim',)
-    print(modules)
-    for module in modules:
-        if filt in ['F140M', 'F162M', 'F182M', 'F187N', 'F210M', 'F335M', 'F360M', 'F405N', 'F410M', 'F480M']:
-            globlist = glob.glob(f"/orange/adamginsburg/jwst/w51/{filt}/pipeline/*{module}*_cal.fits")
-            print(globlist, module)
-            instrument = 'NIRCam'
+    for filt in filts:
+       
+        if filt in ['F140M', 'F162M', 'F182M', 'F187N', 'F210M']:
+            modules = ('nrca1', 'nrca2', 'nrca3', 'nrca4', 'nrcb1', 'nrcb2', 'nrcb3', 'nrcb4')
+        elif filt in ['F335M', 'F360M', 'F405N', 'F410M', 'F480M']:
+            modules = ('nrcalong', 'nrcblong')
         else:
-            globlist = glob.glob(f"/orange/adamginsburg/jwst/w51/{filt}/pipeline/*mirimage_cal.fits")
-            instrument = 'MIRI'
-        for i, fn in enumerate(globlist):
-            print()
-            print(fn)
-            exposurenumber = int(fn.split("_")[2])
-            exposure_id = fn.split("_")[2]
-            visit_id = fn.split("_")[0][-3:]
-            vgroup_id = fn.split("_")[1]
-            exposure_ = f'_exp{exposurenumber:05d}'
-            visitid_ = f'_visit{int(visit_id):03d}' if visit_id is not None else ''
-            if instrument == 'NIRCam':
-                vgroupid_ = f'_vgroup{int(vgroup_id):05d}' if vgroup_id is not None else ''
-            elif instrument == 'MIRI':
-                vgroupid_ = f'_vgroup{vgroup_id}' if vgroup_id is not None else ''
-                module2 = 'mirimage'
-            detector = fn.split("_")[-2]
-            print(detector, flush=True)
-            #f360m_nrcb_visit001_vgroup3105_exp00008_daophot_basic.fits
-            #/orange/adamginsburg/jwst/w51/F360M/f360m_nrcalong_visit001_vgroup3105_exp00005_daophot_basic.fits
-            print('vgroup_id', vgroup_id, flush=True)
-            print('vgroupid_', vgroupid_, flush=True)
-            wav = int(filt[1:4])
-            #fitsdata, rampdata
-            cal_fits = fits.open(fn)
-            ramp_file = fn.replace("_cal.fits", "_ramp.fits")
-            ramp_fits = fits.open(ramp_file)
-            #ramp_fits = RampModel(ramp_file)
-            if True:
+            modules = ('mirim',)
+        print(modules)
+        for module in modules:
+            if filt in ['F140M', 'F162M', 'F182M', 'F187N', 'F210M', 'F335M', 'F360M', 'F405N', 'F410M', 'F480M']:
+                globlist = glob.glob(f"/orange/adamginsburg/jwst/w51/{filt}/pipeline/*{module}*_cal.fits")
+              
+                instrument = 'NIRCam'
+            else:
+                globlist = glob.glob(f"/orange/adamginsburg/jwst/w51/{filt}/pipeline/*mirimage_cal.fits")
+                instrument = 'MIRI'
+            print("filt=", filt, "modules=", modules, flush=True)
+            print("n files=", len(globlist), flush=True)
+            for ii, fn in enumerate(globlist):
+                print()
+                if ii==0:
+                    plot=True
+                else:
+                    plot=False
+                exposurenumber = int(fn.split("_")[2])
+                exposure_id = fn.split("_")[2]
+                visit_id = fn.split("_")[0][-3:]
+                vgroup_id = fn.split("_")[1]
+                exposure_ = f'_exp{exposurenumber:05d}'
+                visitid_ = f'_visit{int(visit_id):03d}' if visit_id is not None else ''
+                if instrument == 'NIRCam':
+                    vgroupid_ = f'_vgroup{int(vgroup_id):05d}' if vgroup_id is not None else ''
+                elif instrument == 'MIRI':
+                    vgroupid_ = f'_vgroup{vgroup_id}' if vgroup_id is not None else ''
+                    module2 = 'mirimage'
+                detector = fn.split("_")[-2]
+                print(detector, flush=True)
+                #f360m_nrcb_visit001_vgroup3105_exp00008_daophot_basic.fits
+                #/orange/adamginsburg/jwst/w51/F360M/f360m_nrcalong_visit001_vgroup3105_exp00005_daophot_basic.fits
+                print('vgroup_id', vgroup_id, flush=True)
+                print('vgroupid_', vgroupid_, flush=True)
+                wav = int(filt[1:4])
+                #fitsdata, rampdata
+                cal_fits = fits.open(fn)
+                ramp_file = fn.replace("_cal.fits", "_ramp.fits")
+                ramp_fits = fits.open(ramp_file)
+                #ramp_fits = RampModel(ramp_file)
+                if True:
+                   
+                    training_data = collect_saturated_pixels(cal_fits, ramp_fits, filtername=filt, instrument=instrument, detector=detector, plot=plot, fn=fn)
+                    #save the training data to a fits file
+                    save_file_name = fn.replace("_cal.fits", "_ml_training.fits")
+                    save_file_name = save_file_name.split("/")[-1]
+                    save_file_name = f"{filt.lower()}_"+save_file_name
+                    training_data.write(f"/orange/adamginsburg/w51/TaehwaYoo/w51_sat_recover/{save_file_name}", overwrite=True)
 
-                training_data = collect_saturated_pixels(cal_fits, ramp_fits, filtername=filt, instrument=instrument, detector=detector, plot=False)
-                #save the training data to a fits file
-                training_data.write(f"/orange/adamginsburg/w51/TaehwaYoo/w51_sat_recover/training_data_{filt}_{module}_{exposure_id}.fits", overwrite=True)
-
-        #for module in ('nrca', 'nrcb', 'merged'):
-        #    for fn in glob.glob(f"/orange/adamginsburg/jwst/w51/F*/pipeline/*{module}*crf.fits"):
-        #        print()
-        #        print(fn)
-    #        remove_saturated_stars(fn, verbose=True)
+            #for module in ('nrca', 'nrcb', 'merged'):
+            #    for fn in glob.glob(f"/orange/adamginsburg/jwst/w51/F*/pipeline/*{module}*crf.fits"):
+            #        print()
+            #        print(fn)
+        #        remove_saturated_stars(fn, verbose=True)
 if __name__ == "__main__":
     main()
 
-    

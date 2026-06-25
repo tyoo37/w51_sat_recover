@@ -12,6 +12,9 @@ taskname=making_training_set
 #for filter in F140M F162M F182M F187N F210M F335M F360M F410M F405N F480M ; do
 #    sbatch --job-name=add_sat_star_find-${filter} --output=add_sat_star_find-${filter}_%j-%A_%a.log  --account=astronomy-dept --qos=astronomy-dept-b --ntasks=2 --nodes=1 --mem=${mem} --time=96:00:00 --wrap "python /blue/adamginsburg/t.yoo/from_red/w51/w51_catalog/py/add_saturated_stars.py --filter=${filter}"
 #done
+echo "STPSF_PATH in slurm:"
+echo $STPSF_PATH
+#for filter in F140M; do
 for filter in F140M F162M F182M F187N F210M F335M F360M F410M F405N F480M ; do
     sbatch --job-name=making_training_set-${filter} --output=making_training_set-${filter}_%j-%A_%a.log  --account=astronomy-dept --qos=astronomy-dept-b --ntasks=2 --nodes=1 --mem=${mem} --time=96:00:00 --wrap "python /blue/adamginsburg/t.yoo/w51_sat_recover/py/making_training_set.py --filter=${filter} --target=w51"
 done
