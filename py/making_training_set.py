@@ -9,6 +9,7 @@ import glob
 from astropy.io import fits
 from scipy.ndimage import label, find_objects, center_of_mass, sum_labels
 from astropy.modeling.fitting import LevMarLSQFitter
+from astropy.stats import sigma_clipped_stats
 from jwst.datamodels import dqflags
 import matplotlib.pyplot as plt
 try:
@@ -142,8 +143,9 @@ from stpsf.utils import to_griddedpsfmodel
 
 
 
-def collect_saturated_pixels(fitsdata, rampdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=30, size=None, 
-min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filtername=None, instrument=None, detector=None, fn=None, img_save_dir = '/orange/adamginsburg/w51/TaehwaYoo/w51_sat_recover/cutout_img'):
+def collect_saturated_pixels(fitsdata, rampdata, path_prefix='/orange/adamginsburg/jwst/w51/psfs/', pad=30, size=None,
+min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filtername=None, instrument=None, detector=None, fn=None, img_save_dir = '/orange/adamginsburg/w51/TaehwaYoo/w51_sat_recover/cutout_img',
+area_ratio_threshold=8.0):
     jfilts = SvoFps.get_filter_list('JWST')
     jfilts.add_index('filterID')
     jfilts = SvoFps.get_filter_list(facility="JWST", instrument=instrument)
@@ -280,7 +282,7 @@ min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filter
             for pname, bounds in (("x_0", (low_x, high_x)), ("y_0", (low_y, high_y))):
                 if hasattr(model, pname):
                     param = getattr(model, pname)
-                    # try the supported API first
+                    # try the supported API first 
                     try:
                         param.bounds = bounds
                         print(f"Set {pname}.bounds = {bounds}")
@@ -334,6 +336,46 @@ min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filter
                 # cut psf_eval to the image size
                 model_image += psf_eval[0:ny, 0:nx]
                 model_err += (psf_eval[0:ny, 0:nx] * result['flux_err'][0])**2  # propagate flux error to model error
+
+            # --- sidelobe residual-flux diagnostic (informational only -- see below) ---
+            # If the connected "saturated" region actually merges the real star
+            # with a second, unrelated star (or with extended/diffuse emission),
+            # a single-PSF fit can only reproduce the compact core it was centered
+            # on, and the data just outside the saturated mask carries flux the
+            # model has no way to produce. In principle that shows up as a large
+            # excess in the residual (cutout - model) there. Because a genuinely
+            # merged blob can be much larger than a single PSF's core, the region
+            # checked here is sized adaptively from area_saturated rather than a
+            # fixed number of pixels.
+            #
+            # In practice, on real W51 MIRI/NIRCam data this statistic did NOT
+            # separate confirmed-bad (merged/extended) sources from confirmed-good
+            # (clean, compact) ones -- e.g. on one calibration exposure, known-good
+            # sources scored 10-66 while known-bad sources scored 13-21, fully
+            # overlapping. The likely reason: W51's diffuse emission is spatially
+            # correlated on scales larger than a pixel, so summing residual flux
+            # over many annulus pixels and normalizing by sqrt(n_pixels) -- which
+            # assumes independent per-pixel noise -- systematically overstates
+            # significance regardless of whether the fit is actually bad. Getting
+            # this right would need a noise model that accounts for that spatial
+            # correlation (or a different formulation entirely), so this is kept
+            # as a stored, non-filtering diagnostic column only. `area_ratio`
+            # (below) is the check that actually catches merged/extended sources
+            # in this dataset.
+            residual = cutout - model_image
+            r_saturated = np.sqrt(area_saturated / np.pi)  # effective radius of the saturated blob
+            outer_iterations = max(int(round(2 * r_saturated)), int(round(3 * fwhm_pix)), mask_buffer + 1)
+            outer_mask = ndimage.binary_dilation(saturated_mask_expanded, iterations=outer_iterations)
+            annulus = outer_mask & ~saturated_mask_expanded & ~mask
+
+            sidelobe_residual_snr = np.nan
+            n_annulus_pix = int(np.sum(annulus))
+            if n_annulus_pix >= 8:
+                # robust *local* background level/scatter from this same annulus
+                _, ann_median, ann_std = sigma_clipped_stats(cutout[annulus])
+                if ann_std > 0:
+                    excess = residual[annulus] - ann_median
+                    sidelobe_residual_snr = np.sum(excess) / (ann_std * np.sqrt(n_annulus_pix))
             """
             threshold_image = np.zeros_like(cutout) 
 
@@ -357,6 +399,20 @@ min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filter
             # check whether the pixels with dqflag = saturated are also flagged as HOT, DEAD, and RC
             # this is a sanity check to make sure that the saturated pixels are not being used in the fit
             idx_saturated_in_cutout = (dq[y0:y1, x0:x1] & dqflags.pixel['SATURATED']) > 0
+            # restrict to pixels belonging to the source actually being fit; otherwise
+            # saturated pixels from an unrelated star sharing this cutout would get
+            # labeled with this source's PSF-fit flux
+            idx_saturated_in_cutout &= (sources[y0:y1, x0:x1] == ii + 1)
+            saturated_dqflags = dq[y0:y1, x0:x1][idx_saturated_in_cutout]
+            if np.any((saturated_dqflags & dqflags.pixel['HOT'])!=0):
+                print(f"Warning: Some saturated pixels are flagged as HOT; skipping source", flush=True)
+                continue
+            if np.any((saturated_dqflags & dqflags.pixel['DEAD'])!=0):
+                print(f"Warning: Some saturated pixels are flagged as DEAD; skipping source", flush=True)
+                continue
+
+
+
             
             # convert idx_saturated_in_cutout to the index from the original image
             npwhere_2d_idx_saturated_in_cutout = np.where(idx_saturated_in_cutout)
@@ -385,13 +441,24 @@ min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filter
             if num_pixels_above_threshold< 5:
                 print(f"Warning: Only {num_pixels_above_threshold} pixels above threshold; skipping source", flush=True)
                 continue
-            
-            
-            # compare FWHM of the model and the size of saturated pixels
-            #if area_saturated > num_pixels_above_threshold:
-            #    print(f"Warning: Saturated mask area ({area_saturated}) is larger than number of pixels above threshold ({num_pixels_above_threshold}); skipping source", flush=True)
-            #    continue
-                
+
+            # compare the observed saturated footprint to the footprint the fitted
+            # point-source model itself would produce above the same threshold. A
+            # clean, isolated saturated star has area_saturated ~ num_pixels_above_threshold;
+            # a saturated region that merges a star with contiguous extended/diffuse
+            # emission (or another blended source) has a footprint far larger than
+            # any point source could produce, and area_ratio blows up. Empirically
+            # (see calibration on real MIRI F1000W sources), clean cores give
+            # ratio ~0.2-2, while confirmed merged/extended cases give ratio ~10-14;
+            # the default threshold is a first cut from that small sample and should
+            # be revisited once run across more data.
+            area_ratio = area_saturated / max(num_pixels_above_threshold, 1)
+            if area_ratio > area_ratio_threshold:
+                print(f"Warning: saturated area ({area_saturated} px) is {area_ratio:.1f}x larger than the "
+                      f"model's own footprint ({num_pixels_above_threshold:.0f} px) at threshold={area_ratio_threshold}; "
+                      f"likely merged/extended saturation, skipping source", flush=True)
+                continue
+
             # process the result
             if result is not None and np.isfinite(fluxerr) and snr > 1 and flux > 0:
                 if index == 0:
@@ -431,15 +498,22 @@ min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filter
 
 
                 if plot:
-                    fig = plt.figure(figsize=(18, 6))
-                    ax1 = fig.add_subplot(1,3,1)
+                    fig = plt.figure(figsize=(12, 12))
+                    ax1 = fig.add_subplot(2,2,1)
                     ax1.imshow(cutout, origin='lower', cmap='viridis', vmin=0, vmax=np.nanpercentile(cutout, 99))
                     ax1.set_title('Cutout')
-                    ax2 = fig.add_subplot(1,3,2)
+                    ax2 = fig.add_subplot(2,2,2)
                     ax2.set_title('Model')
                     ax2.imshow(model_image, origin='lower', cmap='viridis', vmin=0, vmax=np.nanpercentile(cutout, 99))
-                    ax3 = fig.add_subplot(1,3,3)
-                    ax3.imshow(cutout_copied, origin='lower', cmap='viridis', vmin=0, vmax=np.nanpercentile(cutout, 99))
+                    ax3 = fig.add_subplot(2,2,3)
+                    ax3.imshow(cutout-model_image, origin='lower', cmap='viridis', vmin=0, vmax=np.nanpercentile(cutout, 99))
+                    ax3.set_title('residual')
+                    ax4 = fig.add_subplot(2,2,4)
+                    #mark saturated pixel
+                    empty_img = np.zeros_like(cutout_copied)
+                    empty_img[idx_saturated_in_cutout] = 1
+                    ax4.imshow(empty_img, origin='lower', cmap='viridis', vmin=0, vmax=1)
+                    ax4.set_title('Saturated Pixels')
                     # print flux, fluxerr, snr, cfit in the title
                     #ax3.set_title(f'Cutout with Saturated Pixels Replaced\nFlux: {flux_vals[0]:.2f}, FluxErr: {fluxerr_vals[0]:.2f}, SNR: {snr:.2f}, Cfit: {cfit:.2f}')
                     
@@ -454,7 +528,9 @@ min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filter
 
                 # flux and fluxerr (length N)
                 flux_vals = model_image[idx_saturated_in_cutout].ravel()
-                fluxerr_vals = model_err[idx_saturated_in_cutout].ravel()
+                # model_err accumulates squared terms (variance); take sqrt to get
+                # a standard-deviation-like error on the same scale as flux
+                fluxerr_vals = np.sqrt(model_err[idx_saturated_in_cutout]).ravel()
                 if len(results_sats) == 0:
                     results_sats['x'] = cols
                     results_sats['y'] = rows
@@ -488,6 +564,8 @@ min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filter
                     results_sats['dist_to_peak'] = np.sqrt((result['x_fit'] + x0 - cols)**2 + (result['y_fit'] + y0 - rows)**2)
                     results_sats['is_near_peak'] = results_sats['dist_to_peak'] < 5  # within 3 pixels of a known star
                     results_sats['psf_star_flux'] = flux
+                    results_sats['sidelobe_residual_snr'] = np.ones(num_sat_pixels) * sidelobe_residual_snr
+                    results_sats['area_ratio'] = np.ones(num_sat_pixels) * area_ratio
                 else:
                     new_tab = Table()
                     new_tab['x'] = cols 
@@ -522,6 +600,8 @@ min_sep_from_edge=5, edge_npix=10000, mask_buffer=1, plot=True, rindsz=3, filter
                     new_tab['dist_to_peak'] = np.sqrt((result['x_fit'] + x0 - cols)**2 + (result['y_fit'] + y0 - rows)**2)
                     new_tab['is_near_peak'] = new_tab['dist_to_peak'] < 5  # within 3 pixels of a known star
                     new_tab['psf_star_flux'] = flux
+                    new_tab['sidelobe_residual_snr'] = np.ones(num_sat_pixels) * sidelobe_residual_snr
+                    new_tab['area_ratio'] = np.ones(num_sat_pixels) * area_ratio
                     results_sats = table.vstack([results_sats, new_tab])
 
 
