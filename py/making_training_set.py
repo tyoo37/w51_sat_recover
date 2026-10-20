@@ -527,7 +527,9 @@ area_ratio_threshold=8.0):
                 cols = npwhere_2d_idx_saturated_in_original[1]
 
                 # flux and fluxerr (length N)
-                flux_vals = model_image[idx_saturated_in_cutout].ravel()
+                # the ramp records source + background; PSFPhotometry subtracted local_bkg before fitting
+                local_bkg = result['local_bkg'][0]
+                flux_vals = model_image[idx_saturated_in_cutout].ravel() + local_bkg
                 # model_err accumulates squared terms (variance); take sqrt to get
                 # a standard-deviation-like error on the same scale as flux
                 fluxerr_vals = np.sqrt(model_err[idx_saturated_in_cutout]).ravel()
@@ -564,6 +566,7 @@ area_ratio_threshold=8.0):
                     results_sats['dist_to_peak'] = np.sqrt((result['x_fit'] + x0 - cols)**2 + (result['y_fit'] + y0 - rows)**2)
                     results_sats['is_near_peak'] = results_sats['dist_to_peak'] < 5  # within 3 pixels of a known star
                     results_sats['psf_star_flux'] = flux
+                    results_sats['local_bkg'] = np.ones(num_sat_pixels) * local_bkg
                     results_sats['sidelobe_residual_snr'] = np.ones(num_sat_pixels) * sidelobe_residual_snr
                     results_sats['area_ratio'] = np.ones(num_sat_pixels) * area_ratio
                 else:
@@ -600,6 +603,7 @@ area_ratio_threshold=8.0):
                     new_tab['dist_to_peak'] = np.sqrt((result['x_fit'] + x0 - cols)**2 + (result['y_fit'] + y0 - rows)**2)
                     new_tab['is_near_peak'] = new_tab['dist_to_peak'] < 5  # within 3 pixels of a known star
                     new_tab['psf_star_flux'] = flux
+                    new_tab['local_bkg'] = np.ones(num_sat_pixels) * local_bkg
                     new_tab['sidelobe_residual_snr'] = np.ones(num_sat_pixels) * sidelobe_residual_snr
                     new_tab['area_ratio'] = np.ones(num_sat_pixels) * area_ratio
                     results_sats = table.vstack([results_sats, new_tab])
