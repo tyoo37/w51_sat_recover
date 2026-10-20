@@ -699,6 +699,8 @@ def main():
     field = reg_to_field_mapping[target]
 
     basepath = f'/orange/adamginsburg/jwst/w51'
+    out_dir = '/orange/adamginsburg/w51/TaehwaYoo/w51_sat_recover/v2'
+    os.makedirs(f'{out_dir}/cutout_img', exist_ok=True)
     
 
     nircam_short_filters = ['F140M', 'F162M', 'F182M', 'F187N', 'F200W', 'F210M', 'F277W', ]
@@ -720,7 +722,8 @@ def main():
               
                 instrument = 'NIRCam'
             else:
-                globlist = glob.glob(f"/orange/adamginsburg/jwst/w51/{filt}/pipeline/*mirimage_cal.fits")
+                # MIRI: jwst_new_cal_claude Detector1 settings with the saturation step on
+                globlist = glob.glob(f"/orange/adamginsburg/w51/jwst/jwst_new_cal_claude_satstep/{filt}/pipeline_4qpm/*mirimage_cal.fits")
                 instrument = 'MIRI'
             print("filt=", filt, "modules=", modules, flush=True)
             print("n files=", len(globlist), flush=True)
@@ -730,10 +733,11 @@ def main():
                     plot=True
                 else:
                     plot=False
-                exposurenumber = int(fn.split("_")[2])
-                exposure_id = fn.split("_")[2]
-                visit_id = fn.split("_")[0][-3:]
-                vgroup_id = fn.split("_")[1]
+                bn = os.path.basename(fn)
+                exposurenumber = int(bn.split("_")[2])
+                exposure_id = bn.split("_")[2]
+                visit_id = bn.split("_")[0][-3:]
+                vgroup_id = bn.split("_")[1]
                 exposure_ = f'_exp{exposurenumber:05d}'
                 visitid_ = f'_visit{int(visit_id):03d}' if visit_id is not None else ''
                 if instrument == 'NIRCam':
@@ -741,7 +745,7 @@ def main():
                 elif instrument == 'MIRI':
                     vgroupid_ = f'_vgroup{vgroup_id}' if vgroup_id is not None else ''
                     module2 = 'mirimage'
-                detector = fn.split("_")[-2]
+                detector = bn.split("_")[-2]
                 print(detector, flush=True)
                 #f360m_nrcb_visit001_vgroup3105_exp00008_daophot_basic.fits
                 #/orange/adamginsburg/jwst/w51/F360M/f360m_nrcalong_visit001_vgroup3105_exp00005_daophot_basic.fits
@@ -755,12 +759,12 @@ def main():
                 #ramp_fits = RampModel(ramp_file)
                 if True:
                    
-                    training_data = collect_saturated_pixels(cal_fits, ramp_fits, filtername=filt, instrument=instrument, detector=detector, plot=plot, fn=fn)
+                    training_data = collect_saturated_pixels(cal_fits, ramp_fits, filtername=filt, instrument=instrument, detector=detector, plot=plot, fn=fn, img_save_dir=f'{out_dir}/cutout_img')
                     #save the training data to a fits file
                     save_file_name = fn.replace("_cal.fits", "_ml_training.fits")
                     save_file_name = save_file_name.split("/")[-1]
                     save_file_name = f"{filt.lower()}_"+save_file_name
-                    training_data.write(f"/orange/adamginsburg/w51/TaehwaYoo/w51_sat_recover/{save_file_name}", overwrite=True)
+                    training_data.write(f"{out_dir}/{save_file_name}", overwrite=True)
 
             #for module in ('nrca', 'nrcb', 'merged'):
             #    for fn in glob.glob(f"/orange/adamginsburg/jwst/w51/F*/pipeline/*{module}*crf.fits"):
