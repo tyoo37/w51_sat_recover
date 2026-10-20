@@ -2,7 +2,6 @@
 mem=16gb
 taskname=making_training_set
 
-
 #daoloop=("--daophot --skip-crowdsource" " ")
 #mem=32gb
 #for filter in F140M; do
