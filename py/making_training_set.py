@@ -335,7 +335,7 @@ area_ratio_threshold=8.0):
                 psf_eval = big_grid(x-x_fit, y-y_fit) * flux  # works for GriddedPSFModel
                 # cut psf_eval to the image size
                 model_image += psf_eval[0:ny, 0:nx]
-                model_err += (psf_eval[0:ny, 0:nx] * result['flux_err'][0])**2  # propagate flux error to model error
+                model_err += (psf_eval[0:ny, 0:nx] / flux * result['flux_err'][0])**2  # psf_eval already carries flux
 
             # --- sidelobe residual-flux diagnostic (informational only -- see below) ---
             # If the connected "saturated" region actually merges the real star
