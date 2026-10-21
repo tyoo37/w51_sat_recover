@@ -38,6 +38,9 @@ from astropy import table
 from astropy import log
 from filtering import get_filtername, get_fwhm
 import functools
+import sys
+sys.path.insert(0, '/blue/adamginsburg/t.yoo/w51_miri/reduction')
+import miri_4qpm  # MIRI coronagraph (4QPM) pane geometry
 import requests
 import urllib3
 def get_psf(header, path_prefix='.'):
@@ -153,6 +156,9 @@ area_ratio_threshold=8.0):
     filter_bandwidth = row["WidthEff"]
     header = fitsdata[0].header
     data = fitsdata['SCI'].data
+    cal_value_map = data.copy()  # pipeline value per pixel, kept as an alternative label
+    fqpm_quadrant_map = (miri_4qpm.pane_quadrant_image(line_halfwidth=0) if instrument == 'MIRI'
+                         else np.zeros(data.shape, np.uint8))  # 0 = imager field, 1-12 = pane quadrant
     data[np.isnan(fitsdata['VAR_POISSON'].data)] = 0
     dq = fitsdata['DQ'].data
     groupdq = rampdata['GROUPDQ'].data
@@ -403,10 +409,9 @@ area_ratio_threshold=8.0):
             # saturated pixels from an unrelated star sharing this cutout would get
             # labeled with this source's PSF-fit flux
             idx_saturated_in_cutout &= (sources[y0:y1, x0:x1] == ii + 1)
+            # HOT pixels: leave them out of the labels and keep the rest of the source
+            idx_saturated_in_cutout &= (dq[y0:y1, x0:x1] & dqflags.pixel['HOT']) == 0
             saturated_dqflags = dq[y0:y1, x0:x1][idx_saturated_in_cutout]
-            if np.any((saturated_dqflags & dqflags.pixel['HOT'])!=0):
-                print(f"Warning: Some saturated pixels are flagged as HOT; skipping source", flush=True)
-                continue
             if np.any((saturated_dqflags & dqflags.pixel['DEAD'])!=0):
                 print(f"Warning: Some saturated pixels are flagged as DEAD; skipping source", flush=True)
                 continue
@@ -420,9 +425,6 @@ area_ratio_threshold=8.0):
             # flatten the 2d index to 1d index
             npwhere_1d_idx_saturated_in_original = np.ravel_multi_index(npwhere_2d_idx_saturated_in_original, dims=dq.shape)
             saturated_dqflags = dq[y0:y1, x0:x1][idx_saturated_in_cutout]
-            if np.any((saturated_dqflags & dqflags.pixel['HOT'])!=0):
-                print(f"Warning: Some saturated pixels are flagged as HOT; skipping source", flush=True)
-                continue
             if np.any((saturated_dqflags & dqflags.pixel['DEAD'])!=0):
                 print(f"Warning: Some saturated pixels are flagged as DEAD; skipping source", flush=True)
                 continue
@@ -567,6 +569,9 @@ area_ratio_threshold=8.0):
                     results_sats['is_near_peak'] = results_sats['dist_to_peak'] < 5  # within 3 pixels of a known star
                     results_sats['psf_star_flux'] = flux
                     results_sats['local_bkg'] = np.ones(num_sat_pixels) * local_bkg
+                    results_sats['cal_value'] = cal_value_map[rows, cols]
+                    results_sats['fqpm_quadrant'] = fqpm_quadrant_map[rows, cols]
+                    results_sats['in_4qpm'] = fqpm_quadrant_map[rows, cols] > 0
                     results_sats['sidelobe_residual_snr'] = np.ones(num_sat_pixels) * sidelobe_residual_snr
                     results_sats['area_ratio'] = np.ones(num_sat_pixels) * area_ratio
                 else:
@@ -604,6 +609,9 @@ area_ratio_threshold=8.0):
                     new_tab['is_near_peak'] = new_tab['dist_to_peak'] < 5  # within 3 pixels of a known star
                     new_tab['psf_star_flux'] = flux
                     new_tab['local_bkg'] = np.ones(num_sat_pixels) * local_bkg
+                    new_tab['cal_value'] = cal_value_map[rows, cols]
+                    new_tab['fqpm_quadrant'] = fqpm_quadrant_map[rows, cols]
+                    new_tab['in_4qpm'] = fqpm_quadrant_map[rows, cols] > 0
                     new_tab['sidelobe_residual_snr'] = np.ones(num_sat_pixels) * sidelobe_residual_snr
                     new_tab['area_ratio'] = np.ones(num_sat_pixels) * area_ratio
                     results_sats = table.vstack([results_sats, new_tab])
@@ -758,6 +766,15 @@ def main():
                 wav = int(filt[1:4])
                 #fitsdata, rampdata
                 cal_fits = fits.open(fn)
+                if instrument == 'MIRI':
+                    # 4QPM panes are NaN in _cal (no imager flat); _bkgm has them calibrated, shifted by the
+                    # exposure's background-match offset, which is removed to stay on the _cal scale
+                    with fits.open(fn.replace('_cal.fits', '_bkgm.fits')) as bkgm:
+                        sci, var = cal_fits['SCI'].data, cal_fits['VAR_POISSON'].data
+                        offset = np.nanmedian(bkgm['SCI'].data[:, miri_4qpm.IMAGER_X0:] - sci[:, miri_4qpm.IMAGER_X0:])
+                        pane = miri_4qpm.pane_quadrant_image(line_halfwidth=0) > 0
+                        sci[pane] = bkgm['SCI'].data[pane] - offset
+                        var[pane] = bkgm['VAR_POISSON'].data[pane]
                 ramp_file = fn.replace("_cal.fits", "_ramp.fits")
                 ramp_fits = fits.open(ramp_file)
                 #ramp_fits = RampModel(ramp_file)
