@@ -711,7 +711,7 @@ def main():
     field = reg_to_field_mapping[target]
 
     basepath = f'/orange/adamginsburg/jwst/w51'
-    out_dir = '/orange/adamginsburg/w51/TaehwaYoo/w51_sat_recover/v2'
+    out_dir = '/orange/adamginsburg/w51/TaehwaYoo/w51_sat_recover/v3'
     os.makedirs(f'{out_dir}/cutout_img', exist_ok=True)
     
 
