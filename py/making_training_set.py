@@ -411,6 +411,9 @@ area_ratio_threshold=8.0):
             idx_saturated_in_cutout &= (sources[y0:y1, x0:x1] == ii + 1)
             # HOT pixels: leave them out of the labels and keep the rest of the source
             idx_saturated_in_cutout &= (dq[y0:y1, x0:x1] & dqflags.pixel['HOT']) == 0
+            if not idx_saturated_in_cutout.any():
+                print(f"Warning: all saturated pixels are HOT; skipping source", flush=True)
+                continue
             saturated_dqflags = dq[y0:y1, x0:x1][idx_saturated_in_cutout]
             if np.any((saturated_dqflags & dqflags.pixel['DEAD'])!=0):
                 print(f"Warning: Some saturated pixels are flagged as DEAD; skipping source", flush=True)
